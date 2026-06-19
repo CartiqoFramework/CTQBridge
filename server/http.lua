@@ -31,3 +31,11 @@ function CTQ.post(path, body, cb)
 		['Authorization'] = 'Bearer ' .. Config.ApiKey,
 	})
 end
+
+-- Synchronous POST for use inside a thread/coroutine (e.g. connect deferrals,
+-- the ctqlink command). Returns the decoded body on success, or nil.
+function CTQ.postAwait(path, body)
+	local p = promise.new()
+	CTQ.post(path, body, function(ok, data) p:resolve(ok and data or nil) end)
+	return Citizen.Await(p)
+end

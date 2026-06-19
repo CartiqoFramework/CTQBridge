@@ -62,6 +62,27 @@ the server online (`lastSeenAt` now).
 }
 ```
 
+The `/sync` **request** may also include `"resourceVersion": "1.2.0"` (the bridge
+version, for dashboard health/compat). The **response** also includes a `config`
+object — the dashboard-pushed bridge config, applied live each sync:
+
+```jsonc
+{
+  "config": {
+    "whitelist": {
+      "enabled": true,
+      "mode": "roles",                 // "roles" | "open"
+      "allowedRoleIds": ["1234…"],
+      "allowedUserIds": ["5678…"],     // always-allowed Discord users
+      "priorityRoles": { "1234…": 10 },// roleId → queue weight
+      "requireLink": false,
+      "messages": { "denied": "…", "notLinked": "…" }
+    }
+  },
+  "commands": [ /* … as above … */ ]
+}
+```
+
 Returned commands are flipped `PENDING → ACKED` server-side, so the same command
 is never handed out twice. Execute them, then report via `/result`.
 
@@ -120,6 +141,46 @@ cached per identifier; keep it under 16 KB.
 The dashboard requests a profile by enqueuing a `PROFILE` command (returned via
 `/sync`); CTQBridge builds it from the framework object (online) or the database
 (offline) and posts it here.
+
+---
+
+## `POST /roles`
+
+Resolve a player's Discord role IDs for the server's guild (bot token, cached
+~60s). Powers `exports.CTQBridge:GetRoles`.
+
+**Request:** `{ "discordId": "1234…" }`
+**Response:** `{ "inGuild": true, "roles": ["<roleId>", …] }` — `roles` is `null`
+when the user isn't in the guild.
+
+---
+
+## `POST /whitelist`
+
+The connect-gate decision. CTQBridge (and CTQCore's queue, via
+`exports.CTQBridge:CheckWhitelist`) sends the player's live `discord:` id; the
+dashboard checks the configured roles/users and returns the verdict + queue
+priority. Players must have Discord running — no `discordId` ⇒ denied.
+
+**Request body**
+
+```jsonc
+{ "discordId": "1234…" }                 // live discord: value; omit if none
+```
+
+**Response**
+
+```jsonc
+{
+  "allowed": true,
+  "priority": 10,                        // queue weight (higher = sooner)
+  "roles": ["<roleId>", …],
+  "reason": "has-role",                  // disabled|open|has-role|no-role|no-discord
+  "message": null                         // deny message when !allowed
+}
+```
+
+---
 
 ## Target identifiers
 

@@ -91,6 +91,43 @@ database (`players` / `users`, `player_vehicles` / `owned_vehicles`, common
 housing tables) when offline. Money and job are unavailable on standalone
 servers; vehicle/property lookups are best-effort and depend on your tables.
 
+## Whitelist & connect queue
+
+Gate who can join by **Discord role**. Configure the rules from the CARTIQO
+dashboard (FiveM page) or the Discord `/whitelist` command
+(`enable`/`disable`/`mode`/`add-role`/`remove-role`/`add-user`/`list`); they're
+pushed to the bridge automatically on the next sync — no resource restart.
+
+Players must have **Discord running in-game** so their account can be matched via
+their live `discord:` identifier — there's no link/storage step. On connect the
+bridge reads that id and asks the dashboard whether they're allowed.
+
+> When **CTQCore** is running it owns the connect **queue** (it calls the
+> whitelist decision itself), so CTQBridge does not gate connections — it only
+> provides the decision. Standalone, CTQBridge enforces a simple allow/deny.
+
+Local enforcement knobs live in `config.lua` → `Config.Whitelist`
+(`Enforce`, `FailClosed`).
+
+## SDK for other resources (CTQCore, …)
+
+CTQBridge exposes a stable export surface so other resources don't re-implement
+dashboard comms. `ensure CTQBridge` before dependents. Examples:
+
+```lua
+exports.CTQBridge:IsReady()
+exports.CTQBridge:GetFramework()                 -- 'qbcore' | 'esx' | …
+exports.CTQBridge:GetDiscordId(src)              -- '1234…' | nil
+exports.CTQBridge:GetRoles(src)                  -- { '<roleId>', … }
+exports.CTQBridge:CheckWhitelist(src)            -- { allowed, priority, roles, message }
+exports.CTQBridge:GetProfile('license:abc')      -- money/job/vehicles/…
+exports.CTQBridge:Kick(target, reason)
+exports.CTQBridge:Ban(target, reason, durationMs)
+exports.CTQBridge:Unban(target)
+```
+
+Events: `CTQBridge:ready`, `CTQBridge:rolesResolved`, `CTQBridge:whitelistChecked`.
+
 ## Diagnostics
 
 Run this in the **server console** (or txAdmin live console) to confirm a setup:
@@ -100,8 +137,8 @@ ctqbridge diagnostics
 ```
 
 It prints the detected framework, the database resource, the chosen ban store +
-its auto-detected table/column mapping, whether the API key is set, and live
-player/ban counts.
+its auto-detected table/column mapping, the whitelist status, the resource
+version, whether the API key is set, and live player/ban counts.
 
-See [`../CTQBridge-API.md`](../CTQBridge-API.md) for the full request/response
+See [`./CTQBridge-API.md`](./CTQBridge-API.md) for the full request/response
 contract.

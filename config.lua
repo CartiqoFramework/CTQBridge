@@ -64,6 +64,21 @@ Config.Ban = {
 	AutoCreate = true,
 }
 
+-- ── Whitelist / connect queue ───────────────────────────────────────────────
+-- The whitelist RULES (which roles/users are allowed) are configured from the
+-- CARTIQO dashboard or the Discord /whitelist command and pushed to the bridge
+-- automatically. These are the local enforcement knobs only.
+Config.Whitelist = {
+	-- Apply the dashboard whitelist on player connect. When false, the bridge
+	-- still answers exports.CTQBridge:CheckWhitelist (so CTQCore can run its own
+	-- queue UI) but does not block connections itself.
+	Enforce = true,
+
+	-- If the dashboard is unreachable during a connect, FailClosed=true blocks the
+	-- player; false (default) lets them in so a web outage can't lock out the server.
+	FailClosed = false,
+}
+
 -- ── Behaviour ───────────────────────────────────────────────────────────────
 Config.DefaultKickMessage = 'You were removed by a server admin.'
 Config.DefaultBanMessage  = 'You are banned from this server.'
