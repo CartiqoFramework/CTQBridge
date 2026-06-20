@@ -25,9 +25,11 @@ local function selectAdapter()
 end
 
 local function execute(cmd)
+	local action = cmd.action or ''
+
 	-- PROFILE is special: it returns structured data rather than a status, so it
 	-- POSTs the built profile to /agent/profile and reports completion.
-	if (cmd.action or '') == 'PROFILE' then
+	if action == 'PROFILE' then
 		if not activeAdapter.getProfile then return 'FAILED', 'profiles not supported' end
 		local ok, profile = pcall(activeAdapter.getProfile, cmd.target)
 		if not ok or not profile then return 'FAILED', 'could not build profile' end
@@ -35,7 +37,23 @@ local function execute(cmd)
 		return 'DONE', 'profile sent'
 	end
 
-	local fn = activeAdapter[(cmd.action or ''):lower()]
+	-- RESTART (scheduled restarts, job 2): broadcast then quit. A process manager
+	-- (txAdmin / pterodactyl / systemd) is expected to bring the server back up.
+	if action == 'RESTART' then
+		TriggerClientEvent('chat:addMessage', -1, { color = { 255, 80, 80 }, args = { '[Server]', 'The server is restarting now.' } })
+		CTQ.warn('scheduled restart requested by dashboard — quitting in 2s')
+		SetTimeout(2000, function() ExecuteCommand('quit Scheduled restart (CARTIQO)') end)
+		return 'DONE', 'restarting'
+	end
+
+	-- A MESSAGE addressed to "all"/"*" is a server-wide broadcast (used by the
+	-- scheduled-restart warning) rather than a whisper to one player.
+	if action == 'MESSAGE' and (cmd.target == 'all' or cmd.target == '*') then
+		TriggerClientEvent('chat:addMessage', -1, { color = { 88, 101, 242 }, args = { '[Server]', cmd.reason or '' } })
+		return 'DONE', 'broadcast'
+	end
+
+	local fn = activeAdapter[action:lower()]
 	if not fn then return 'FAILED', 'unsupported action' end
 	local ok, message = fn(cmd.target, cmd.reason, cmd.durationMs)
 	return ok and 'DONE' or 'FAILED', message or (ok and 'ok' or 'failed')
@@ -77,6 +95,12 @@ RegisterCommand('ctqbridge', function(source, args)
 	else
 		print(('  whitelist: %s'):format(CTQ.config and 'off' or 'off (config not synced yet)'))
 	end
+	-- Offline-fallback diagnostics (job 12).
+	if Whitelist and Whitelist.cacheAge then
+		local age = Whitelist.cacheAge()
+		print(('  wl cache : %s'):format(age and (age .. 's old') or 'empty (no rules cached yet)'))
+	end
+	print(('  fallback : %s (when API unreachable)'):format((Config.FallbackBehaviour or 'allow')))
 	local okP, players = pcall(activeAdapter.getPlayers)
 	print(('  players  : %s online'):format(okP and #players or '?'))
 	print(('  bans     : %s cached'):format(#(Bans.cached() or {})))
@@ -85,7 +109,11 @@ end, true)
 
 local syncCount = 0
 
-local function syncOnce()
+-- One long-poll sync round. The dashboard holds the request open for up to ~4s
+-- (returning 204 when nothing's queued), so we reconnect promptly after each
+-- response for near-real-time command delivery (job 11). `cb(promptly)` tells the
+-- loop whether to reconnect immediately (success/204) or back off (error).
+local function syncRound(cb)
 	syncCount = syncCount + 1
 	local includeBans = (syncCount % Config.BanSyncEvery) == 1 -- first sync + every Nth
 
@@ -97,17 +125,26 @@ local function syncOnce()
 	if includeBans then body.bans = activeAdapter.getBans() end
 
 	CTQ.post('/sync', body, function(ok, data)
-		if not ok or not data then return end
-		-- Apply dashboard-pushed config (whitelist rules, messages) live.
-		CTQ.config = data.config or CTQ.config
-		if not data.commands then return end
-		local results = {}
-		for _, cmd in ipairs(data.commands) do
-			CTQ.log(('executing %s on %s'):format(cmd.action, cmd.target))
-			local status, message = execute(cmd)
-			results[#results + 1] = { id = cmd.id, status = status, message = message }
+		-- A non-2xx (or no connection) → back off so a web outage can't hammer.
+		if not ok then return cb(false) end
+
+		-- 2xx with a body: apply config + run commands. 204 (no body) → just loop.
+		if data then
+			CTQ.config = data.config or CTQ.config
+			-- Feed the offline whitelist cache (job 12) so connect decisions survive
+			-- a later web outage.
+			if Whitelist and Whitelist.updateCache then Whitelist.updateCache(CTQ.config and CTQ.config.whitelist) end
+			if data.commands then
+				local results = {}
+				for _, cmd in ipairs(data.commands) do
+					CTQ.log(('executing %s on %s'):format(cmd.action, cmd.target))
+					local status, message = execute(cmd)
+					results[#results + 1] = { id = cmd.id, status = status, message = message }
+				end
+				if #results > 0 then CTQ.post('/result', { results = results }) end
+			end
 		end
-		if #results > 0 then CTQ.post('/result', { results = results }) end
+		cb(true) -- reconnect promptly (the server already held the connection)
 	end)
 end
 
@@ -176,9 +213,17 @@ CreateThread(function()
 		end
 	end)
 
-	while true do
-		local ok, err = pcall(syncOnce)
-		if not ok then CTQ.warn('sync error: ' .. tostring(err)) end
-		Wait(Config.SyncInterval)
+	-- Self-scheduling long-poll driver: reconnect immediately after a held
+	-- response/204, back off on errors. Replaces the old fixed-interval loop.
+	local function loop()
+		local ok, err = pcall(syncRound, function(promptly)
+			local delay = promptly and (Config.SyncMinDelay or 250) or (Config.SyncBackoff or 3000)
+			SetTimeout(delay, loop)
+		end)
+		if not ok then
+			CTQ.warn('sync error: ' .. tostring(err))
+			SetTimeout(Config.SyncBackoff or 3000, loop)
+		end
 	end
+	loop()
 end)

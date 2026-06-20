@@ -13,7 +13,12 @@ Config.ApiKey   = 'ctq_REPLACE_ME'
 Config.Framework = 'auto'
 
 -- ── Timing ──────────────────────────────────────────────────────────────────
-Config.SyncInterval = 5000  -- ms between sync calls (roster + command pull)
+-- The dashboard long-polls /sync (holds the request open ~4s, returning 204 when
+-- nothing's queued), so the bridge reconnects right after each response for
+-- near-real-time command delivery. These knobs only shape the reconnect cadence.
+Config.SyncMinDelay = 250   -- ms to wait after a successful/held response before reconnecting
+Config.SyncBackoff  = 3000  -- ms to wait after a failed sync (web unreachable) before retrying
+Config.SyncInterval = 5000  -- legacy fixed interval (kept for reference; unused by the long-poll loop)
 Config.BanSyncEvery = 6     -- include the ban list every Nth sync (saves bandwidth)
 Config.BanCacheRefresh = 15000 -- ms between ban-list refreshes from the DB
 
@@ -76,8 +81,20 @@ Config.Whitelist = {
 
 	-- If the dashboard is unreachable during a connect, FailClosed=true blocks the
 	-- player; false (default) lets them in so a web outage can't lock out the server.
+	-- (Superseded by Config.FallbackBehaviour below, which also applies cached rules.)
 	FailClosed = false,
 }
+
+-- How long to wait for the whitelist API on connect before falling back (ms).
+Config.WhitelistTimeout = 3000
+
+-- Offline fallback behaviour (job 12) when the CARTIQO API is unreachable AND no
+-- cached rules can decide:
+--   'allow' → let everyone in (a web outage can't lock out the server)
+--   'deny'  → block all connects until the API is reachable again
+-- When cached whitelist rules ARE available they're applied first (always-allow
+-- users + open mode), and this only governs the unverifiable role-gated case.
+Config.FallbackBehaviour = 'allow' -- 'allow' | 'deny'
 
 -- ── Behaviour ───────────────────────────────────────────────────────────────
 Config.DefaultKickMessage = 'You were removed by a server admin.'

@@ -15,11 +15,39 @@ exports('IsReady', function() return CTQ.ready == true end)
 exports('GetFramework', function() return CTQ.framework end)
 exports('GetDbKind', function() return Db and Db.kind or nil end)
 
+-- Block (up to timeoutMs, default 10s) until the bridge is ready, polling every
+-- 100ms. For resources that start before CTQBridge and need it immediately.
+-- Returns true once ready, false if it timed out. Call inside a thread.
+exports('WaitUntilReady', function(timeoutMs)
+	local deadline = GetGameTimer() + (timeoutMs or 10000)
+	while CTQ.ready ~= true do
+		if GetGameTimer() >= deadline then return false end
+		Wait(100)
+	end
+	return true
+end)
+
 exports('GetDiscordId', function(src) return Util.discordId(src) end)
 exports('GetIdentifiers', function(src) return Util.identifierList(src) end)
 exports('FindPlayer', function(identifier) return Util.findPlayer(identifier) end)
 
-exports('GetRoles', function(src) return Whitelist.getRoles(src) end)
+-- Per-player role cache (60s) so repeated calls (e.g. on connect + spawn) don't
+-- spam the agent API.
+local roleCache = {} -- [src] = { roles = {...}, at = <ms> }
+local ROLE_TTL = 60000
+
+exports('GetRoles', function(src)
+	local now = GetGameTimer()
+	local hit = roleCache[src]
+	if hit and (now - hit.at) < ROLE_TTL then return hit.roles end
+	local roles = Whitelist.getRoles(src) or {}
+	roleCache[src] = { roles = roles, at = now }
+	return roles
+end)
+
+-- Drop cached roles when a player leaves so their slot doesn't go stale.
+AddEventHandler('playerDropped', function() roleCache[source] = nil end)
+
 exports('CheckWhitelist', function(src) return Whitelist.check(src) end)
 
 exports('GetProfile', function(identifier)
